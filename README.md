@@ -1,66 +1,63 @@
-# AI Hack Day — SQL Server + Semantic Kernel Vector Store (15‑min demo)
+SQL Server Vector Search demo (.NET 8 + Microsoft.Extensions.AI + Azure OpenAI)
 
-This is a **tiny, newbie‑friendly demo** showing vector search using the **Semantic Kernel SQL Server Vector Store connector (Preview)** and **Microsoft.Extensions.AI** for embeddings.
+This sample seeds a few policies, stores their embeddings in SQL Server via the Semantic Kernel SQL Server connector, and lets you run semantic searches from the console.
 
-## Prereqs
+What changed in this version
+- Uses AzureOpenAIClient + AzureCliCredential (no API key in code). Requires `az login`.
+- Uses Microsoft.Extensions.AI `AsIEmbeddingGenerator()` to generate embeddings.
+- Interactive console loop for repeated queries.
+- Collection is dropped and recreated on each run (`EnsureCollectionDeletedAsync` + `EnsureCollectionExistsAsync`).
+- Embedding dimension for `Policy.ContentEmbedding` is 1536 to match `text-embedding-ada-002`.
+- Targets .NET 8 and C# 12. NuGet packages updated in the project file.
+
+Prerequisites
 - .NET 8 SDK
-- **Azure SQL** or **SQL Server 2025 (17.x) Preview** (for the `VECTOR` type)
-- An embedding provider:
-  - **OpenAI** (default in this sample), or
-  - **Azure OpenAI** (swap a few lines—see below)
+- SQL Server reachable at your connection string (local install or a container)
+- Azure CLI installed and logged in: `az login`
+- Azure OpenAI resource with an embeddings deployment (e.g., `text-embedding-ada-002`) and your identity granted access
 
-> SQL Server vector data type docs: https://learn.microsoft.com/sql/t-sql/data-types/vector-data-type
+Configure
+- Open `SkSqlVectorDemo/Program.cs` and review:
+  - `conn` (SQL Server connection string). Make sure Server, Database, and Password match your environment.
+  - `azureEndpoint` (your Azure OpenAI resource endpoint, e.g., `https://<your-resource>.openai.azure.com`).
+  - `embedDeploymentOrModel` (your embedding deployment name; default in code is `text-embedding-ada-002`).
+- Sign in to Azure CLI: `az login` (the signed-in identity must have access to the Azure OpenAI resource).
 
-## 1) Get packages (pre‑release)
-```bash
-dotnet new console -n throwaway -f net8.0 && rm -rf throwaway   # ensure SDK works
+Set up SQL Server
+- Run a container (optional):
+  docker run -e "ACCEPT_EULA=Y" -e "MSSQL_SA_PASSWORD=yourStrong(!)Password" -p 1433:1433 --name mssql -d mcr.microsoft.com/mssql/server:2022-latest
+- Create the database once (matches default connection string):
+  sqlcmd -S 127.0.0.1,1433 -U sa -P "yourStrong(!)Password" -Q "CREATE DATABASE [sqldb-embeddinglab]"
 
-# From inside src/SkSqlVectorDemo
-dotnet add package Microsoft.SemanticKernel.Connectors.SqlServer --prerelease
-dotnet add package Microsoft.Extensions.AI.OpenAI --prerelease
-```
+Build and run
+- From the repository root:
+  dotnet restore
+  dotnet run --project SkSqlVectorDemo
 
-## 2) Configure environment
-```bash
-# SQL connection (use Azure SQL or local SQL 2025 preview)
-setx SQLSERVER_CONN "Server=localhost;Database=SkDemo;Integrated Security=true;TrustServerCertificate=true;"
+What the app does
+- Creates a `SqlServerCollection<string, Policy>` named "Policies".
+- Deletes and recreates the collection on startup.
+- Seeds three Policy records, generates embeddings with the configured Azure OpenAI deployment, and upserts them.
+- Runs a top-3 vector search for your query and prints score, title, and content. The console remains interactive for additional queries.
 
-# OpenAI (or set AZURE_OPENAI_API_KEY + use Azure client below)
-setx OPENAI_API_KEY "<your_openai_key>"
-setx OPENAI_EMBED_MODEL "text-embedding-3-small"
-```
+Sample
+?> Can I stay home on Friday?
+0.873  Leave policy  →  Employees can work from home on Fridays.
+...
+?>
 
-> On macOS/Linux use `export` instead of `setx`. For Azure SQL, use a proper ADO.NET connection string.
+Changing models
+- If you change the embedding model/deployment, ensure `Policy.ContentEmbedding` dimensions match:
+  - text-embedding-ada-002 → 1536
+  - text-embedding-3-small → 1536
+  - text-embedding-3-large → 3072
+- Update the `[VectorStoreVector(Dimensions: ...)]` attribute in `SkSqlVectorDemo/Policy.cs` accordingly.
 
-## 3) Run
-```bash
-cd src/SkSqlVectorDemo
-dotnet run
-```
+Troubleshooting
+- Authentication: run `az login`; ensure your identity has access (e.g., Cognitive Services User) to the Azure OpenAI resource.
+- SQL connectivity: verify host/port, DB exists, credentials correct, and `TrustServerCertificate=True` for local dev.
+- Empty results: confirm embeddings are generated without exceptions and seeding ran (collection is recreated each run).
 
-You should see the **"Leave policy"** note ranked highest for the query “Can I stay home on Friday?”.
-
-## Using Azure OpenAI instead (optional)
-Replace the embedding client setup in `Program.cs` with:
-```csharp
-using OpenAI;
-var endpoint = Environment.GetEnvironmentVariable("AZURE_OPENAI_ENDPOINT")!;
-var aoaiKey = Environment.GetEnvironmentVariable("AZURE_OPENAI_API_KEY")!;
-var deployment = Environment.GetEnvironmentVariable("AZURE_OPENAI_EMBED_DEPLOYMENT") ?? "text-embedding-3-small";
-
-var aoai = new AzureOpenAIClient(new Uri(endpoint), new Azure.AzureKeyCredential(aoaiKey));
-var embeddingClient = aoai.GetEmbeddingClient(deployment);
-IEmbeddingGenerator<string, Embedding<float>> embedGen = embeddingClient.AsIEmbeddingGenerator();
-```
-
-## Notes / Limitations
-- The **SQL connector uses a Flat vector index** today; great for workshops and small datasets.
-- ANN in SQL (e.g., `CREATE VECTOR INDEX ... TYPE='diskann'` + `VECTOR_SEARCH`) is available in SQL Server 2025 preview, but **not** used by this connector yet.
-- APIs are **Preview** and may change.
-
-## Credits / Links
-- SK SQL Server connector (Preview): https://learn.microsoft.com/semantic-kernel/concepts/vector-store-connectors/out-of-the-box-connectors/sql-connector
-- Vector Store concepts: https://learn.microsoft.com/semantic-kernel/concepts/vector-store-connectors/
-- IEmbeddingGenerator: https://learn.microsoft.com/dotnet/api/microsoft.extensions.ai.openaiclientextensions.asiembeddinggenerator
-- SQL VECTOR type: https://learn.microsoft.com/sql/t-sql/data-types/vector-data-type
-- DiskANN improvements: https://devblogs.microsoft.com/azure-sql/sql-server-2025-ctp-2-1-diskann-improvements/
+Security notes
+- Do not hardcode secrets for production. Prefer environment variables, user-secrets, or Azure Key Vault.
+- Remove `EnsureCollectionDeletedAsync` in production to avoid dropping data on startup.
